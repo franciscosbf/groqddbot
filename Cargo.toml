@@ -9,11 +9,20 @@ dashmap = "6.1.0"
 serenity = "0.12"
 poise = "0.6.1"
 serde = "1.0.216"
-log = "0.4.22"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 config = "0.15.2"
-clap = { version = "4.5.3", features = ["derive"] }
 anyhow = "1.0.94"
 thiserror = "2"
 simplelog = "^0.12.0"
 chrono = "0.4.39"
+
+[dependencies.log]
+version = "0.4.22"
+features = ["kv"]
+
+[dependencies.tokio]
+version = "1"
+features = ["macros", "rt", "rt-multi-thread", "time"]
+
+[dependencies.clap]
+version = "4.5.3"
+features = ["derive"]
