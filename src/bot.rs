@@ -131,7 +131,7 @@ pub enum Error {
 }
 
 async fn send_cooldown_alert(ctx: Context<'_>) {
-    let embed = serenity::CreateEmbed::new().title(":yellow_circle: Hold on, I'm not that fast!");
+    let embed = serenity::CreateEmbed::new().title(":hotsprings: Hold on, I'm not that fast!");
     let message = poise::CreateReply::default().embed(embed).reply(true);
     let _ = ctx.send(message).await;
 }
