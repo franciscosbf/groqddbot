@@ -7,6 +7,7 @@ use genai::{
 
 type Response = String;
 
+#[derive(Debug)]
 struct User {
     client: genai::Client,
     model: Arc<String>,
@@ -30,11 +31,13 @@ impl User {
     }
 }
 
+#[derive(Debug)]
 struct Prompt {
     user_message: ChatMessage,
     assistant_message: ChatMessage,
 }
 
+#[derive(Debug)]
 pub struct Session {
     user: User,
     history: VecDeque<Prompt>,
