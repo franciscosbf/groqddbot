@@ -216,14 +216,19 @@ async fn event_handler(
         serenity::FullEvent::Ready { data_about_bot } => {
             let servers = data_about_bot.guilds.len();
             let session = data_about_bot.session_id.as_str();
-            log::info!(servers, session; "bot has been successfully connected to discord");
+            log::info!(
+                "bot has been connected to discord on {} server{} (session '{}')",
+                servers,
+                if servers > 1 { "s" } else { "" },
+                session
+            );
         }
         serenity::FullEvent::Resume { .. } => {
             log::info!("bot was reconnected to discord");
         }
         serenity::FullEvent::ShardsReady { total_shards } => {
             let shards = total_shards;
-            log::info!(shards; "bot shards are ready");
+            log::info!("bot shards are ready (loaded {})", shards);
         }
         _ => (),
     }
@@ -267,9 +272,18 @@ async fn build_client(
     framework: poise::Framework<BotData, InternalError>,
 ) -> Result<serenity::Client, serenity::Error> {
     let intents = serenity::GatewayIntents::GUILD_MESSAGES;
+    let activity = serenity::ActivityData {
+        name: "Stealing LLM's access for my own benefit".to_string(),
+        kind: serenity::ActivityType::Playing,
+        state: None,
+        url: None,
+    };
+    let status = serenity::OnlineStatus::Online;
 
     serenity::ClientBuilder::new(bot.discord_token, intents)
         .framework(framework)
+        .activity(activity)
+        .status(status)
         .await
 }
 
