@@ -14,10 +14,7 @@ anyhow = "1.0.94"
 thiserror = "2"
 simplelog = "^0.12.0"
 chrono = "0.4.39"
-
-[dependencies.log]
-version = "0.4.22"
-features = ["kv"]
+log = "0.4.22"
 
 [dependencies.tokio]
 version = "1"
