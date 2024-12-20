@@ -9,18 +9,86 @@ use std::{
 
 use dashmap::DashMap;
 use poise::serenity_prelude as serenity;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{chat, config};
 
 const ONE_DAY_IN_SECS: Duration = Duration::from_secs(3600);
 
+type GuildId = u64;
+type UserId = u64;
+
+type GuildSessions = Arc<DashMap<UserId, ChatSession>>;
+
+#[derive(Clone, Debug)]
+struct ChatSession {
+    session: Arc<Mutex<chat::Session>>,
+}
+
+impl ChatSession {
+    fn new(session: chat::Session) -> Self {
+        Self {
+            session: Arc::new(Mutex::new(session)),
+        }
+    }
+    async fn send_message(&self, content: String) -> Result<String, genai::Error> {
+        self.session.lock().await.send_message(content).await
+    }
+}
+
 struct BotDataInner {
-    sbuilder: chat::SessionBuilder,
-    conf: config::App,
     next_flush: AtomicI64,
+    flush_timeout: Duration,
     flushing: AtomicBool,
-    sessions: RwLock<DashMap<u64, DashMap<u64, chat::Session>>>,
+    sbuilder: chat::SessionBuilder,
+    sessions: RwLock<DashMap<GuildId, GuildSessions>>,
+    conf: config::App,
+}
+
+impl BotDataInner {
+    async fn session(&self, guild: GuildId, user: UserId) -> ChatSession {
+        let sessions = self.sessions.read().await;
+
+        let guild_sessions = {
+            sessions
+                .entry(guild)
+                .or_insert_with(|| Arc::new(DashMap::new()))
+                .clone()
+        };
+
+        let session = {
+            guild_sessions
+                .entry(user)
+                .or_insert_with(|| ChatSession::new(self.sbuilder.create_chat()))
+                .clone()
+        };
+
+        session
+    }
+
+    fn schedule_next_flush(&self) {
+        let next_flush = (chrono::Local::now() + self.flush_timeout).timestamp();
+        self.next_flush.store(next_flush, Ordering::Release);
+    }
+
+    fn next_flush(&self) -> chrono::DateTime<chrono::Utc> {
+        let timestamp = self.next_flush.load(Ordering::Acquire);
+        chrono::DateTime::from_timestamp(timestamp, 0).unwrap()
+    }
+
+    fn is_flushing(&self) -> bool {
+        self.flushing.load(Ordering::Acquire)
+    }
+
+    fn flushing(&self, yes: bool) {
+        self.flushing.store(yes, Ordering::Release);
+    }
+
+    async fn flush(&self) {
+        self.flushing(true);
+        self.sessions.write().await.clear();
+        self.flushing(false);
+    }
 }
 
 #[derive(Clone)]
@@ -32,11 +100,12 @@ impl BotData {
     fn new(sbuilder: chat::SessionBuilder, conf: config::App) -> Self {
         Self {
             inner: Arc::new(BotDataInner {
-                sbuilder,
-                conf,
+                flush_timeout: ONE_DAY_IN_SECS * conf.chat.flush_days as u32,
                 next_flush: AtomicI64::new(0),
                 flushing: AtomicBool::new(false),
+                sbuilder,
                 sessions: RwLock::new(DashMap::new()),
+                conf,
             }),
         }
     }
@@ -61,18 +130,38 @@ pub enum Error {
     Initialization(#[source] serenity::Error),
 }
 
+async fn send_cooldown_alert(ctx: Context<'_>) {
+    let embed = serenity::CreateEmbed::new().title(":yellow_circle: Hold on, I'm not that fast!");
+    let message = poise::CreateReply::default().embed(embed).reply(true);
+    let _ = ctx.send(message).await;
+}
+
+async fn send_alert_on_info_error(ctx: Context<'_>) {
+    let embed =
+        serenity::CreateEmbed::new().title(":man_shrugging: Something went wrong and Idk why...");
+    let message = poise::CreateReply::default().embed(embed).reply(true);
+    let _ = ctx.send(message).await;
+}
+
 async fn handle_info_error(err: poise::FrameworkError<'_, BotData, InternalError>) {
     match err {
-        poise::FrameworkError::Command { ref error, .. } => {
+        poise::FrameworkError::Command { ctx, ref error, .. } => {
             log::error!("unexpected error while executing 'info' command: {error}");
+
+            send_alert_on_info_error(ctx).await;
         }
-        poise::FrameworkError::CommandPanic { payload, .. } => {
+        poise::FrameworkError::CommandPanic { ctx, payload, .. } => {
             log::error!(
                 "info command was abruptly stopped (i.e., panicked): {}",
                 payload.as_deref().unwrap_or("unknown reason")
             );
+
+            send_alert_on_info_error(ctx).await;
         }
-        _ => (),
+        poise::FrameworkError::CooldownHit { ctx, .. } => {
+            send_cooldown_alert(ctx).await;
+        }
+        err => log::error!("scary error on 'info' command: {err}"),
     }
 }
 
@@ -80,20 +169,16 @@ async fn handle_info_error(err: poise::FrameworkError<'_, BotData, InternalError
 #[poise::command(
     slash_command,
     guild_only,
-    guild_cooldown = 4,
+    user_cooldown = 2,
     required_permissions = "SEND_MESSAGES",
     on_error = "handle_info_error"
 )]
 async fn info(ctx: Context<'_>) -> Result<(), InternalError> {
     let data = ctx.data();
-
-    let reset_timestamp = data.next_flush.load(Ordering::Acquire);
-    let reset_date = chrono::DateTime::from_timestamp(reset_timestamp, 0)
-        .unwrap()
-        .format("%v, %R");
-
-    let history_size = data.conf.chat.history_size;
-    let model = &data.conf.ai_provider.model;
+    let reset_date = data.next_flush().format("%v, %R");
+    let conf = &data.conf;
+    let history_size = conf.chat.history_size;
+    let model = &conf.ai_provider.model;
 
     let embed = serenity::CreateEmbed::new()
         .title("Characteristics")
@@ -128,13 +213,19 @@ async fn info(ctx: Context<'_>) -> Result<(), InternalError> {
 }
 
 async fn handle_prompt_error(err: poise::FrameworkError<'_, BotData, InternalError>) {
-    if let poise::FrameworkError::Command { ctx, ref error, .. } = err {
-        log::error!("unexpected error while executing 'prompt' command: {error}");
+    match err {
+        poise::FrameworkError::Command { ctx, ref error, .. } => {
+            log::error!("unexpected error while executing 'prompt' command: {error}");
 
-        let embed = serenity::CreateEmbed::new()
-            .title(":red_circle: Failed to send message, as an unexpected error occurred");
-        let message = poise::CreateReply::default().embed(embed).reply(true);
-        let _ = ctx.send(message).await;
+            let embed = serenity::CreateEmbed::new()
+                .title(":skull: Failed to send message. Something went realy bad...");
+            let message = poise::CreateReply::default().embed(embed).reply(true);
+            let _ = ctx.send(message).await;
+        }
+        poise::FrameworkError::CooldownHit { ctx, .. } => {
+            send_cooldown_alert(ctx).await;
+        }
+        err => log::error!("scary error on 'prompt' command: {err}"),
     }
 }
 
@@ -151,11 +242,12 @@ async fn prompt(
     #[description = "message to send"] content: String,
 ) -> Result<(), InternalError> {
     let data = ctx.data();
+    let conf = &data.conf;
 
-    if content.len() > data.conf.chat.prompt_size as usize {
+    if content.len() > conf.chat.prompt_size as usize {
         let embed = serenity::CreateEmbed::new().title(format!(
             ":red_circle: Message must be {} tokens max",
-            data.conf.chat.prompt_size
+            conf.chat.prompt_size
         ));
         let message = poise::CreateReply::default().embed(embed).reply(true);
         ctx.send(message).await?;
@@ -163,7 +255,7 @@ async fn prompt(
         return Ok(());
     }
 
-    if data.flushing.load(Ordering::Acquire) {
+    if data.is_flushing() {
         let embed = serenity::CreateEmbed::new()
             .title(":yellow_circle: History is being flushed, wait a little more");
         let message = poise::CreateReply::default().embed(embed).reply(true);
@@ -172,17 +264,14 @@ async fn prompt(
         return Ok(());
     }
 
-    let guild_id = ctx.guild_id().unwrap().get();
-    let author_id = ctx.author().id.get();
+    let guild = ctx.guild_id().unwrap().get();
+    let user = ctx.author().id.get();
 
-    let sessions = data.sessions.read().await;
-
-    let guild_sessions = sessions.entry(guild_id).or_insert_with(DashMap::new);
-    let mut session = guild_sessions
-        .entry(author_id)
-        .or_insert_with(|| data.sbuilder.create_chat());
-
-    let response = session.send_message(content).await?;
+    let response = data
+        .session(guild, user)
+        .await
+        .send_message(content)
+        .await?;
 
     ctx.reply(response).await?;
 
@@ -190,18 +279,13 @@ async fn prompt(
 }
 
 fn start_sessions_flusher(data: BotData) {
-    let timeout = ONE_DAY_IN_SECS * data.conf.chat.flush_days as u32;
-
     tokio::spawn(async move {
         loop {
-            let next_flush = (chrono::Local::now() + timeout).timestamp();
-            data.next_flush.store(next_flush, Ordering::Release);
+            data.schedule_next_flush();
 
-            tokio::time::sleep(timeout).await;
+            tokio::time::sleep(data.flush_timeout).await;
 
-            data.flushing.store(true, Ordering::Release);
-            data.sessions.write().await.clear();
-            data.flushing.store(false, Ordering::Release);
+            data.flush().await;
         }
     });
 }
