@@ -8,12 +8,13 @@ use std::{
 };
 
 use dashmap::DashMap;
-use poise::serenity_prelude as serenity;
+use poise::{serenity_prelude as serenity, ReplyHandle};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{chat, config};
 
 const ONE_DAY_IN_SECS: Duration = Duration::from_secs(3600);
+const DELETE_MSG_AFTER_SECS: Duration = Duration::from_secs(10);
 
 type GuildId = u64;
 type UserId = u64;
@@ -130,17 +131,46 @@ pub enum Error {
     Initialization(#[source] serenity::Error),
 }
 
+async fn send_embedded_reply(
+    ctx: Context<'_>,
+    embed: serenity::CreateEmbed,
+) -> Result<ReplyHandle<'_>, serenity::Error> {
+    let message = poise::CreateReply::default().embed(embed).reply(true);
+    ctx.send(message).await
+}
+
+async fn send_temporary_embedded_reply(
+    ctx: Context<'_>,
+    embed: serenity::CreateEmbed,
+) -> Result<(), serenity::Error> {
+    let http = ctx.serenity_context().http.clone();
+    let message = send_embedded_reply(ctx, embed)
+        .await?
+        .into_message()
+        .await?;
+
+    tokio::spawn(async move {
+        tokio::time::sleep(DELETE_MSG_AFTER_SECS).await;
+
+        let _ = message.delete(http).await;
+    });
+
+    Ok(())
+}
+
 async fn send_cooldown_alert(ctx: Context<'_>) {
     let embed = serenity::CreateEmbed::new().title(":hotsprings: Hold on, I'm not that fast!");
-    let message = poise::CreateReply::default().embed(embed).reply(true);
-    let _ = ctx.send(message).await;
+    if let Err(err) = send_temporary_embedded_reply(ctx, embed).await {
+        log::warn!("failed to send cooldown alert: {err}");
+    }
 }
 
 async fn send_alert_on_info_error(ctx: Context<'_>) {
     let embed =
         serenity::CreateEmbed::new().title(":man_shrugging: Something went wrong and Idk why...");
-    let message = poise::CreateReply::default().embed(embed).reply(true);
-    let _ = ctx.send(message).await;
+    if let Err(err) = send_temporary_embedded_reply(ctx, embed).await {
+        log::warn!("failed to send alert on error in 'info' command: {err}",);
+    }
 }
 
 async fn handle_info_error(err: poise::FrameworkError<'_, BotData, InternalError>) {
@@ -206,8 +236,7 @@ async fn info(ctx: Context<'_>) -> Result<(), InternalError> {
             format!("{} tokens (aka characters)", data.conf.chat.prompt_size),
             false,
         );
-    let message = poise::CreateReply::default().embed(embed).reply(true);
-    ctx.send(message).await?;
+    send_embedded_reply(ctx, embed).await?;
 
     Ok(())
 }
@@ -219,8 +248,7 @@ async fn handle_prompt_error(err: poise::FrameworkError<'_, BotData, InternalErr
 
             let embed = serenity::CreateEmbed::new()
                 .title(":skull: Failed to send message. Something went realy bad...");
-            let message = poise::CreateReply::default().embed(embed).reply(true);
-            let _ = ctx.send(message).await;
+            let _ = send_embedded_reply(ctx, embed).await;
         }
         poise::FrameworkError::CooldownHit { ctx, .. } => {
             send_cooldown_alert(ctx).await;
@@ -249,8 +277,7 @@ async fn prompt(
             ":red_circle: Message must be {} tokens max",
             conf.chat.prompt_size
         ));
-        let message = poise::CreateReply::default().embed(embed).reply(true);
-        ctx.send(message).await?;
+        send_embedded_reply(ctx, embed).await?;
 
         return Ok(());
     }
@@ -258,8 +285,7 @@ async fn prompt(
     if data.is_flushing() {
         let embed = serenity::CreateEmbed::new()
             .title(":yellow_circle: History is being flushed, wait a little more");
-        let message = poise::CreateReply::default().embed(embed).reply(true);
-        ctx.send(message).await?;
+        send_embedded_reply(ctx, embed).await?;
 
         return Ok(());
     }
