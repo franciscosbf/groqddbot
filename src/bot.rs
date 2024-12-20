@@ -83,7 +83,7 @@ async fn info(ctx: Context<'_>) -> Result<(), InternalError> {
     let model = &data.conf.ai_provider.model;
 
     let embed = serenity::CreateEmbed::new()
-        .title("Prompt Characteristics")
+        .title("Characteristics")
         .description(
             "**Note:** prompt messages are removed\n\
             when session limit has been reached",
@@ -105,7 +105,7 @@ async fn info(ctx: Context<'_>) -> Result<(), InternalError> {
         .field(":brain: | LLM's Name:", model, false)
         .field(
             ":pencil: | Prompt Message Size Limit:",
-            format!("{} tokens", data.conf.chat.prompt_size),
+            format!("{} tokens (aka characters)", data.conf.chat.prompt_size),
             false,
         );
     let message = poise::CreateReply::default().embed(embed).reply(true);
@@ -129,7 +129,7 @@ async fn handle_prompt_error(err: poise::FrameworkError<'_, BotData, InternalErr
 #[poise::command(
     slash_command,
     guild_only,
-    member_cooldown = 2,
+    user_cooldown = 2,
     required_permissions = "SEND_MESSAGES",
     on_error = "handle_prompt_error"
 )]
@@ -139,9 +139,9 @@ async fn prompt(
 ) -> Result<(), InternalError> {
     let data = ctx.data();
 
-    if data.flushing.load(Ordering::Acquire) {
+    if content.len() > data.conf.chat.prompt_size as usize {
         let embed = serenity::CreateEmbed::new().title(format!(
-            ":red_circle: Message must be {} max",
+            ":red_circle: Message must be {} tokens max",
             data.conf.chat.prompt_size
         ));
         let message = poise::CreateReply::default().embed(embed).reply(true);
