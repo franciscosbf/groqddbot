@@ -218,8 +218,8 @@ async fn info(ctx: Context<'_>) -> Result<(), InternalError> {
     let embed = serenity::CreateEmbed::new()
         .title("Characteristics")
         .description(
-            "**Note:** prompt messages are removed\n\
-            when session limit has been reached",
+            "**Note:** older interactions are removed
+            when session limit is reached",
         )
         .field(
             ":wastebasket: | Sessions Reset Date:",
