@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-genai = "=0.1.15"
+genai = { git = "https://github.com/franciscosbf/rust-genai" }
 dashmap = "6.1.0"
 serenity = "0.12"
 poise = "0.6.1"
