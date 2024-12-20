@@ -1,0 +1,9 @@
+bot:
+  discord_token: ""
+chat:
+  prompt_size: 255
+  flush_days: 1
+  history_size: 2
+ai_provider:
+  api_key: ""
+  model: ""
