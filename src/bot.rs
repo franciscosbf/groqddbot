@@ -13,6 +13,8 @@ use tokio::sync::RwLock;
 
 use crate::{chat, config};
 
+const ONE_DAY_IN_SECS: Duration = Duration::from_secs(3600);
+
 struct BotDataInner {
     sbuilder: chat::SessionBuilder,
     conf: config::App,
@@ -60,7 +62,18 @@ pub enum Error {
 }
 
 async fn handle_info_error(err: poise::FrameworkError<'_, BotData, InternalError>) {
-    log::error!("unexpected error in info command: {err}");
+    match err {
+        poise::FrameworkError::Command { ref error, .. } => {
+            log::error!("unexpected error while executing 'info' command: {error}");
+        }
+        poise::FrameworkError::CommandPanic { payload, .. } => {
+            log::error!(
+                "info command was abruptly stopped (i.e., panicked): {}",
+                payload.as_deref().unwrap_or("unknown reason")
+            );
+        }
+        _ => (),
+    }
 }
 
 /// Displays information about the model and prompt characteristics
@@ -115,9 +128,9 @@ async fn info(ctx: Context<'_>) -> Result<(), InternalError> {
 }
 
 async fn handle_prompt_error(err: poise::FrameworkError<'_, BotData, InternalError>) {
-    log::error!("unexpected error in prompt command: {err}");
+    if let poise::FrameworkError::Command { ctx, ref error, .. } = err {
+        log::error!("unexpected error while executing 'prompt' command: {error}");
 
-    if let poise::FrameworkError::Command { ctx, .. } = err {
         let embed = serenity::CreateEmbed::new()
             .title(":red_circle: Failed to send message, as an unexpected error occurred");
         let message = poise::CreateReply::default().embed(embed).reply(true);
@@ -176,8 +189,8 @@ async fn prompt(
     Ok(())
 }
 
-fn start_sessions_flusher(flush_days: u8, data: BotData) {
-    let timeout = Duration::from_secs(flush_days as u64 * 3600);
+fn start_sessions_flusher(data: BotData) {
+    let timeout = ONE_DAY_IN_SECS * data.conf.chat.flush_days as u32;
 
     tokio::spawn(async move {
         loop {
@@ -193,6 +206,31 @@ fn start_sessions_flusher(flush_days: u8, data: BotData) {
     });
 }
 
+async fn event_handler(
+    _ctx: &serenity::Context,
+    event: &serenity::FullEvent,
+    _framework: poise::FrameworkContext<'_, BotData, InternalError>,
+    _data: &BotData,
+) -> Result<(), InternalError> {
+    match event {
+        serenity::FullEvent::Ready { data_about_bot } => {
+            let servers = data_about_bot.guilds.len();
+            let session = data_about_bot.session_id.as_str();
+            log::info!(servers, session; "bot has been successfully connected to discord");
+        }
+        serenity::FullEvent::Resume { .. } => {
+            log::info!("bot was reconnected to discord");
+        }
+        serenity::FullEvent::ShardsReady { total_shards } => {
+            let shards = total_shards;
+            log::info!(shards; "bot shards are ready");
+        }
+        _ => (),
+    }
+
+    Ok(())
+}
+
 fn build_framework(conf: &config::App) -> poise::Framework<BotData, InternalError> {
     let sbuilder = chat::SessionBuilder::new(
         conf.ai_provider.api_key.clone(),
@@ -202,18 +240,21 @@ fn build_framework(conf: &config::App) -> poise::Framework<BotData, InternalErro
 
     let data = BotData::new(sbuilder, conf.clone());
 
-    start_sessions_flusher(conf.chat.flush_days, data.clone());
-
     poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![info(), prompt()],
+            event_handler: |ctx, event, framework, data| {
+                Box::pin(event_handler(ctx, event, framework, data))
+            },
             ..Default::default()
         })
-        .setup(|ctx, _, framework| {
+        .setup(|ctx, _ready, framework| {
             Box::pin(async move {
                 let commands = &framework.options().commands;
                 let create_commands = poise::builtins::create_application_commands(commands);
                 serenity::Command::set_global_commands(ctx, create_commands).await?;
+
+                start_sessions_flusher(data.clone());
 
                 Ok(data)
             })
