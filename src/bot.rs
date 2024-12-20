@@ -142,7 +142,7 @@ async fn handle_prompt_error(err: poise::FrameworkError<'_, BotData, InternalErr
 #[poise::command(
     slash_command,
     guild_only,
-    user_cooldown = 2,
+    user_cooldown = 4,
     required_permissions = "SEND_MESSAGES",
     on_error = "handle_prompt_error"
 )]
