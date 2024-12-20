@@ -196,6 +196,7 @@ async fn handle_info_error(err: poise::FrameworkError<'_, BotData, InternalError
         poise::FrameworkError::CooldownHit { ctx, .. } => {
             send_cooldown_alert(ctx).await;
         }
+        poise::FrameworkError::MissingBotPermissions { .. } => (),
         err => log::error!("scary error on 'info' command: {err}"),
     }
 }
@@ -258,6 +259,7 @@ async fn handle_prompt_error(err: poise::FrameworkError<'_, BotData, InternalErr
         poise::FrameworkError::CooldownHit { ctx, .. } => {
             send_cooldown_alert(ctx).await;
         }
+        poise::FrameworkError::MissingBotPermissions { .. } => (),
         err => log::error!("scary error on 'prompt' command: {err}"),
     }
 }
@@ -336,7 +338,7 @@ async fn event_handler(
             log::info!(
                 "bot has been connected to discord on {} server{} (session '{}')",
                 servers,
-                if servers > 1 { "s" } else { "" },
+                if servers != 1 { "s" } else { "" },
                 session
             );
         }
