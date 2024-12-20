@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{chat, config};
 
-const ONE_DAY_IN_SECS: Duration = Duration::from_secs(3600);
+const ONE_DAY_IN_SECS: Duration = Duration::from_secs(86400);
 const DELETE_MSG_AFTER_SECS: Duration = Duration::from_secs(10);
 
 type GuildId = u64;
