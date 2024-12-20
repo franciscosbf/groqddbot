@@ -32,8 +32,13 @@ impl ChatSession {
             session: Arc::new(Mutex::new(session)),
         }
     }
+
     async fn send_message(&self, content: String) -> Result<String, genai::Error> {
         self.session.lock().await.send_message(content).await
+    }
+
+    async fn remove_last_interaction(&self) {
+        self.session.lock().await.pop_last_interaction();
     }
 }
 
@@ -293,15 +298,17 @@ async fn prompt(
     let guild = ctx.guild_id().unwrap().get();
     let user = ctx.author().id.get();
 
-    let response = data
-        .session(guild, user)
-        .await
-        .send_message(content)
-        .await?;
+    let session = data.session(guild, user).await;
+    let response = session.send_message(content).await?;
 
-    ctx.reply(response).await?;
+    match ctx.reply(response).await {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            session.remove_last_interaction().await;
 
-    Ok(())
+            Err(Box::from(err))
+        }
+    }
 }
 
 fn start_sessions_flusher(data: BotData) {

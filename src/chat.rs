@@ -32,7 +32,7 @@ impl User {
 }
 
 #[derive(Debug)]
-struct Prompt {
+struct Interaction {
     user_message: ChatMessage,
     assistant_message: ChatMessage,
 }
@@ -40,7 +40,7 @@ struct Prompt {
 #[derive(Debug)]
 pub struct Session {
     user: User,
-    history: VecDeque<Prompt>,
+    history: VecDeque<Interaction>,
 }
 
 impl Session {
@@ -51,12 +51,12 @@ impl Session {
         }
     }
 
-    fn append_to_history(&mut self, prompt: Prompt) {
+    fn append_to_history(&mut self, interaction: Interaction) {
         if self.history.len() == self.history.capacity() {
             self.history.pop_front();
         }
 
-        self.history.push_back(prompt);
+        self.history.push_back(interaction);
     }
 
     pub async fn send_message(&mut self, content: String) -> Result<Response, genai::Error> {
@@ -75,12 +75,16 @@ impl Session {
         let response = self.user.send_message(chat_request).await?;
         let assistant_message = ChatMessage::assistant(response.clone());
 
-        self.append_to_history(Prompt {
+        self.append_to_history(Interaction {
             user_message,
             assistant_message,
         });
 
         Ok(response)
+    }
+
+    pub fn pop_last_interaction(&mut self) {
+        self.history.pop_back();
     }
 }
 
