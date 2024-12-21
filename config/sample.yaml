@@ -3,7 +3,7 @@ bot:
 chat:
   prompt_size: 255
   flush_days: 1
-  history_size: 2
+  history_size: 1
 ai_provider:
   api_key: ""
   model: ""
